@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bouncer Recruiter</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f7f7f7; margin: 0; padding: 0; }
+    .container { max-width: 500px; margin: 40px auto; background: #fff; padding: 2em; border-radius: 8px; box-shadow: 0 2px 8px #0001; }
+    h2 { text-align: center; }
+    label { display: block; margin-top: 1em; }
+    input, select, textarea { width: 100%; padding: 0.5em; margin-top: 0.3em; border-radius: 4px; border: 1px solid #ccc; }
+    button { margin-top: 1.5em; width: 100%; padding: 0.7em; background: #007bff; color: #fff; border: none; border-radius: 4px; font-size: 1em; cursor: pointer; }
+    button:disabled { background: #aaa; }
+    .questions { margin-top: 2em; }
+    .session { margin-top: 1em; font-size: 0.95em; color: #333; }
+    .error { color: #b00; margin-top: 1em; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Recruiter: Submit Job Role</h2>
+    <form id="recruiterForm">
+      <label>Job Role
+        <input type="text" id="jobRole" required />
+      </label>
+      <label>Required Skills (comma separated)
+        <input type="text" id="skills" required />
+      </label>
+      <label>Experience Level
+        <select id="experience">
+          <option>Junior</option>
+          <option>Intermediate</option>
+          <option>Senior</option>
+        </select>
+      </label>
+      <button type="submit">Generate Questions</button>
+    </form>
+    <div class="session" id="sessionId"></div>
+    <div class="questions" id="questions"></div>
+    <div class="error" id="error"></div>
+  </div>
+  <script>
+    document.getElementById('recruiterForm').onsubmit = async function(e) {
+      e.preventDefault();
+      document.getElementById('questions').innerHTML = '';
+      document.getElementById('sessionId').innerHTML = '';
+      document.getElementById('error').innerText = '';
+      const job_role = document.getElementById('jobRole').value.trim();
+      const required_skills = document.getElementById('skills').value.split(',').map(s => s.trim()).filter(Boolean);
+      const experience_level = document.getElementById('experience').value;
+      const payload = { job_role, required_skills, experience_level };
+      try {
+        const res = await fetch('/recruiter/submit-job-role', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        document.getElementById('sessionId').innerHTML = '<b>Session ID:</b> ' + data.session_id;
+        document.getElementById('questions').innerHTML = '<b>Questions:</b><ol>' + data.questions.map(q => `<li>${q}</li>`).join('') + '</ol>';
+      } catch (err) {
+        document.getElementById('error').innerText = 'Error: ' + err.message;
+      }
+    };
+  </script>
+</body>
+</html>

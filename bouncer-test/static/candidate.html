@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bouncer Candidate</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f7f7f7; margin: 0; padding: 0; }
+    .container { max-width: 500px; margin: 40px auto; background: #fff; padding: 2em; border-radius: 8px; box-shadow: 0 2px 8px #0001; }
+    h2 { text-align: center; }
+    label { display: block; margin-top: 1em; }
+    input { width: 100%; padding: 0.5em; margin-top: 0.3em; border-radius: 4px; border: 1px solid #ccc; }
+    button { margin-top: 1.5em; width: 100%; padding: 0.7em; background: #28a745; color: #fff; border: none; border-radius: 4px; font-size: 1em; cursor: pointer; }
+    button:disabled { background: #aaa; }
+    .question { margin-top: 2em; font-size: 1.1em; }
+    .feedback { margin-top: 1em; color: #333; }
+    .error { color: #b00; margin-top: 1em; }
+    .session { margin-bottom: 1em; }
+    .candidate-id { margin-bottom: 1em; font-size: 1em; color: #007bff; word-break: break-all; }
+    audio { width: 100%; margin-top: 1em; border-radius: 8px; background: #000; }
+    .upload-status { margin-top: 1em; color: #007bff; }
+    .timer { margin-top: 1em; font-size: 1.1em; color: #d2691e; text-align: center; }
+    #stopBtn { background: #dc3545; margin-top: 1em; }
+    .next-timer { margin-top: 1em; font-size: 1.1em; color: #007bff; text-align: center; }
+    .processing { margin-top: 2em; font-size: 1.1em; color: #28a745; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Candidate: Answer Questions</h2>
+    <div class="session">
+      <label>Session ID
+        <input type="text" id="sessionId" required />
+      </label>
+      <div class="candidate-id" id="candidateIdBox"></div>
+      <button onclick="startSession()">Start</button>
+    </div>
+    <div class="question" id="questionBox" style="display:none;"></div>
+    <div id="recorderBox" style="display:none;">
+      <audio id="preview" controls></audio>
+      <div class="timer" id="timer"></div>
+      <button id="stopBtn" style="display:none;">Stop</button>
+      <div class="upload-status" id="uploadStatus"></div>
+      <div class="next-timer" id="nextTimer"></div>
+    </div>
+    <div class="feedback" id="feedback"></div>
+    <div class="error" id="error"></div>
+    <div class="processing" id="processing" style="display:none;"></div>
+  </div>
+  <script>
+    function generateCandidateId() {
+      // Simple UUID v4 generator
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+    }
+    let currentQ = 0;
+    let sessionId = '';
+    let candidateId = generateCandidateId();
+    let lastQuestion = '';
+    let mediaRecorder, recordedChunks = [], stream, timerInterval, autoTimeout, nextTimeout, nextCountdownInterval;
+    document.getElementById('candidateIdBox').innerHTML = '<b>Your Candidate ID:</b> ' + candidateId;
+    function startSession() {
+      sessionId = document.getElementById('sessionId').value.trim();
+      if (!sessionId) {
+        document.getElementById('error').innerText = 'Please enter session ID.';
+        return;
+      }
+      currentQ = 0;
+      document.getElementById('feedback').innerText = '';
+      document.getElementById('error').innerText = '';
+      fetchQuestion();
+    }
+    async function fetchQuestion() {
+      document.getElementById('recorderBox').style.display = 'none';
+      document.getElementById('questionBox').style.display = 'none';
+      document.getElementById('feedback').innerText = '';
+      document.getElementById('error').innerText = '';
+      document.getElementById('uploadStatus').innerText = '';
+      document.getElementById('timer').innerText = '';
+      document.getElementById('nextTimer').innerText = '';
+      try {
+        const res = await fetch(`/candidate/questions/${sessionId}?q=${currentQ}`);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        lastQuestion = data.question;
+        document.getElementById('questionBox').innerText = `Q${currentQ+1}: ${data.question}`;
+        document.getElementById('questionBox').style.display = 'block';
+        document.getElementById('recorderBox').style.display = 'block';
+        await autoRecord();
+      } catch (err) {
+        // If no more questions, trigger processing
+        let isNoMoreQuestions = false;
+        try {
+          const errObj = JSON.parse(err.message);
+          if (errObj.detail && errObj.detail.includes('No more questions')) {
+            isNoMoreQuestions = true;
+          }
+        } catch {
+          if (err.message.includes('No more questions')) {
+            isNoMoreQuestions = true;
+          }
+        }
+        if (isNoMoreQuestions) {
+          document.getElementById('processing').style.display = 'block';
+          document.getElementById('processing').innerText = 'All questions completed! Processing your answers...';
+          fetch(`/candidate/process/${candidateId}`)
+            .then(r => r.json())
+            .then(data => {
+              document.getElementById('processing').innerText = 'Processing complete!';
+            })
+            .catch(e => {
+              document.getElementById('processing').innerText = 'Processing failed: ' + e.message;
+            });
+        } else {
+          document.getElementById('error').innerText = 'Error: ' + err.message;
+        }
+        document.getElementById('questionBox').style.display = 'none';
+        document.getElementById('recorderBox').style.display = 'none';
+      }
+    }
+    async function autoRecord() {
+      const preview = document.getElementById('preview');
+      const timer = document.getElementById('timer');
+      const stopBtn = document.getElementById('stopBtn');
+      const nextTimer = document.getElementById('nextTimer');
+      stopBtn.style.display = 'block';
+      preview.src = '';
+      recordedChunks = [];
+      // Change to video+audio
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+      mediaRecorder.onstop = () => {
+        preview.src = '';
+        stopBtn.style.display = 'none';
+        timer.innerText = 'Recording finished.';
+        const blob = new Blob(recordedChunks, { type: 'video/webm' });
+        preview.src = URL.createObjectURL(blob);
+        preview.style.display = 'block';
+        autoUpload(blob);
+      };
+      mediaRecorder.start();
+      preview.style.display = 'none';
+      let timeLeft = 30;
+      timer.innerText = `Recording... ${timeLeft}s left`;
+      timerInterval = setInterval(() => {
+        timeLeft--;
+        timer.innerText = `Recording... ${timeLeft}s left`;
+        if (timeLeft <= 0) {
+          clearInterval(timerInterval);
+          clearTimeout(autoTimeout);
+          stopRecording();
+        }
+      }, 1000);
+      autoTimeout = setTimeout(() => {
+        clearInterval(timerInterval);
+        stopRecording();
+      }, 30000);
+      stopBtn.onclick = () => {
+        clearInterval(timerInterval);
+        clearTimeout(autoTimeout);
+        stopRecording();
+      };
+    }
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+        stream.getTracks().forEach(track => track.stop());
+      }
+    }
+    function autoUpload(blob) {
+      const formData = new FormData();
+      formData.append('session_id', sessionId);
+      formData.append('candidate_id', candidateId);
+      formData.append('question', lastQuestion);
+      formData.append('q_index', currentQ);
+      formData.append('audio', blob, `${currentQ+1}.webm`);
+      document.getElementById('uploadStatus').innerText = 'Uploading...';
+      fetch('/candidate/upload-audio', {
+        method: 'POST',
+        body: formData
+      })
+      .then(res => {
+        if (!res.ok) throw new Error('Upload failed');
+        return res.json();
+      })
+      .then(() => {
+        document.getElementById('uploadStatus').innerText = 'Uploaded!';
+        let nextTime = 3;
+        document.getElementById('nextTimer').innerText = `Next question in ${nextTime}s...`;
+        nextCountdownInterval = setInterval(() => {
+          nextTime--;
+          if (nextTime > 0) {
+            document.getElementById('nextTimer').innerText = `Next question in ${nextTime}s...`;
+          } else {
+            clearInterval(nextCountdownInterval);
+            document.getElementById('nextTimer').innerText = '';
+            document.getElementById('uploadStatus').innerText = '';
+            currentQ++;
+            preview.style.display = 'none';
+            fetchQuestion();
+          }
+        }, 1000);
+      })
+      .catch(err => {
+        document.getElementById('uploadStatus').innerText = 'Upload error: ' + err.message;
+      });
+    }
+  </script>
+</body>
+</html>
